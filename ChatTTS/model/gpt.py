@@ -36,6 +36,8 @@ class GPT(nn.Module):
         self.device = device
         self.device_gpt = device_gpt
 
+        self.generator = torch.Generator(device=device)
+
         self.config = gpt_config
         self.num_vq = int(gpt_config["num_vq"])
         self.num_audio_tokens = int(gpt_config["num_audio_tokens"])
@@ -89,7 +91,7 @@ class GPT(nn.Module):
             ],
         )
 
-    def from_pretrained(self, file_path: str):
+    def from_pretrained(self, file_path: str, experimental=False):
         if self.is_vllm and platform.system().lower() == "linux":
             from safetensors.torch import save_file
 
@@ -132,12 +134,16 @@ class GPT(nn.Module):
         self.load_state_dict(torch.load(file_path, weights_only=True, mmap=True))
 
         if (
-            "cuda" in str(self.device_gpt) and platform.system().lower() == "linux"
+            experimental
+            and "cuda" in str(self.device_gpt)
+            and platform.system().lower() == "linux"
         ):  # is TELlamaModel
             try:
                 from .cuda import TELlamaModel
 
-                self.logger.info("Linux with CUDA, try NVIDIA accelerated TELlamaModel")
+                self.logger.warning(
+                    "Linux with CUDA, try NVIDIA accelerated TELlamaModel because experimental is enabled"
+                )
                 state_dict = self.gpt.state_dict()
                 vanilla = TELlamaModel.from_state_dict(state_dict, self.llama_config)
                 # Force mem release. Taken from huggingface code
@@ -249,6 +255,7 @@ class GPT(nn.Module):
             if self.cache_position is not None:
                 self.cache_position = self.cache_position.to(device, dtype=dtype)
 
+    @torch.no_grad()
     def _prepare_generation_inputs(
         self,
         input_ids: torch.Tensor,
@@ -369,6 +376,7 @@ class GPT(nn.Module):
             del_all(self.attentions)
             del_all(self.hiddens)
 
+    @torch.no_grad()
     def _prepare_generation_outputs(
         self,
         inputs_ids: torch.Tensor,
@@ -416,6 +424,7 @@ class GPT(nn.Module):
         show_tqdm=True,
         ensure_non_empty=True,
         stream_batch=24,
+        manual_seed: Optional[int] = None,
         context=Context(),
     ):
 
@@ -581,7 +590,14 @@ class GPT(nn.Module):
 
             del logits
 
-            idx_next = torch.multinomial(scores, num_samples=1).to(finish.device)
+            if manual_seed is None:
+                idx_next = torch.multinomial(scores, num_samples=1).to(finish.device)
+            else:
+                idx_next = torch.multinomial(
+                    scores,
+                    num_samples=1,
+                    generator=self.generator.manual_seed(manual_seed),
+                ).to(finish.device)
 
             del scores
 
@@ -605,7 +621,7 @@ class GPT(nn.Module):
                     "unexpected end at index %s",
                     str([unexpected_idx.item() for unexpected_idx in finish.nonzero()]),
                 )
-                if ensure_non_empty:
+                if ensure_non_empty and manual_seed is None:
                     if show_tqdm:
                         pbar.close()
                     self.logger.warning("regenerate in order to ensure non-empty")
@@ -637,6 +653,7 @@ class GPT(nn.Module):
                         show_tqdm,
                         ensure_non_empty,
                         stream_batch,
+                        manual_seed,
                         context,
                     )
                     for result in new_gen:

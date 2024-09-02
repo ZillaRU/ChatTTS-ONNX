@@ -7,12 +7,13 @@ now_dir = os.getcwd()
 sys.path.append(now_dir)
 
 import logging
+import re
 
 import ChatTTS
 
 from tools.logger import get_logger
 
-logger = get_logger("Test #588", lv=logging.WARN)
+logger = get_logger("Test", lv=logging.WARN)
 
 chat = ChatTTS.Chat(logger)
 chat.load(compile=False, source="huggingface")  # Set to True for better performance
@@ -31,8 +32,16 @@ refined = chat.infer(
     params_refine_text=ChatTTS.Chat.RefineTextParams(show_tqdm=False),
 )
 
+trimre = re.compile("\\[[\w_]+\\]")
+
+
+def trim_tags(txt: str) -> str:
+    global trimre
+    return trimre.sub("", txt)
+
+
 for i, t in enumerate(refined):
-    if len(t) > 4 * len(texts[i]):
+    if len(trim_tags(t)) > 4 * len(texts[i]):
         fail = True
         logger.warning("in: %s, out: %s", texts[i], t)
 
