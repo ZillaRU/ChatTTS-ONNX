@@ -17,6 +17,8 @@ class Speaker:
 
     def sample_random(self) -> str:
         return self._encode(self._sample_random())
+    def sample_random_num(self) -> str:
+        return self._sample_random()
 
     @torch.no_grad()
     def apply(
